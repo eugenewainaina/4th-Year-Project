@@ -1,14 +1,16 @@
 package com.example.schemas
 
+import com.example.LocalDateSerializer
 import com.example.UUIDSerializer
-import kotlinx.coroutines.Dispatchers
+import com.example.dbQuery
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import org.jetbrains.exposed.sql.*
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
+import org.jetbrains.exposed.sql.javatime.date
 import org.jetbrains.exposed.sql.json.jsonb
-import org.jetbrains.exposed.sql.transactions.experimental.newSuspendedTransaction
 import org.jetbrains.exposed.sql.transactions.transaction
+import java.time.LocalDate
 import java.util.*
 
 
@@ -21,6 +23,8 @@ data class ExposedTutor(
     val subjects: Map<String, Int>,
     val languages: List<String>,
     val location: String?,
+    @Serializable(with = LocalDateSerializer::class)
+    val dateOfBirth: LocalDate,
     val rating: Double,
     val profilePicture: String?,
     val password: String
@@ -28,27 +32,9 @@ data class ExposedTutor(
 
 // val format = Json { prettyPrint = true }
 
-/*
 
 @Serializable
-data class Subjects(
-    val subject: String,
-    val rate: Int
-)
-*/
-
-/*
-
-@Serializable
-data class TutorResponse(
-    val response: String,
-    val tutors: List<Tutor>
-)
-*/
-
-
-@Serializable
-data class Tutor(
+data class SuggestedTutor(
     @Serializable(with = UUIDSerializer::class)
     val id: UUID,
     val name: String,
@@ -61,11 +47,12 @@ data class Tutor(
 @Serializable
 data class ChatbotResponse(
     val response: String,
-    val tutors: List<Tutor>
+    val tutors: List<SuggestedTutor>
 )
 
 
 /*
+
 fun generateRagResponse(query: String): String? {
     return transaction {
         exec("SELECT set_config('ai.ollama_host', 'http://host.docker.internal:11434', false);")
@@ -83,15 +70,16 @@ fun generateRagResponse(query: String): String? {
 
 class TutorService(database: Database) {
 
-    object Tutors : Table("tutors") {
+    object TutorsTable : Table("tutors") {
         val id = uuid("id").autoGenerate()
         val name = varchar("name", length = 255)
         val phone = varchar("phone", length = 20).nullable()
         val email = varchar("email", length = 255)
         val bio = text("bio")
-        val subjects = jsonb<Map<String, Int>>("subjects", Json { prettyPrint = true }) //jsonb(name = "subjects")
+        val subjects = jsonb<Map<String, Int>>("subjects", Json { prettyPrint = true })
         val languages_spoken = array<String>("languages_spoken")
         val location = varchar("location", length = 255).nullable()
+        val dateOfBirth = date("date_of_birth")
         val rating = decimal("rating", precision = 3, scale = 2).default(5.00.toBigDecimal())
         val profilePicture = text("profile_picture").nullable()
         val password = text("password")
@@ -101,7 +89,7 @@ class TutorService(database: Database) {
 
     init {
         transaction(database) {
-            SchemaUtils.create(Tutors)
+            SchemaUtils.create(TutorsTable)
 
             //exec("SELECT set_config('ai.ollama_host', 'http://host.docker.internal:11434', false);")
 
@@ -110,7 +98,7 @@ class TutorService(database: Database) {
     }
 
     suspend fun create(tutor: ExposedTutor): UUID = dbQuery {
-        Tutors.insert {
+        TutorsTable.insert {
             it[name] = tutor.name
             it[phone] = tutor.phone
             it[email] = tutor.email
@@ -118,10 +106,10 @@ class TutorService(database: Database) {
             //it[subjects] = tutor.subjects
             it[languages_spoken] = tutor.languages
             it[location] = tutor.location
-            it[rating] = tutor.rating.toBigDecimal()
+            it[dateOfBirth] = tutor.dateOfBirth
             it[profilePicture] = tutor.profilePicture
             it[password] = tutor.password
-        }[Tutors.id]
+        }[TutorsTable.id]
     }
 
     suspend fun getAllTutors(): List<ExposedTutor> {
@@ -132,25 +120,28 @@ class TutorService(database: Database) {
         return dbQuery {
             println("in query")
             transaction {
-                ttt = Tutors.selectAll()
+                ttt = TutorsTable.selectAll()
                     .map {
                         ExposedTutor(
-                            name = it[Tutors.name],
-                            phone = it[Tutors.phone],
-                            email = it[Tutors.email],
-                            bio = it[Tutors.bio],
-                            subjects = it[Tutors.subjects],
-                            languages = it[Tutors.languages_spoken],
-                            location = it[Tutors.location],
-                            rating = it[Tutors.rating].toDouble(),
-                            profilePicture = it[Tutors.profilePicture],
-                            password = it[Tutors.password],
+                            name = it[TutorsTable.name],
+                            phone = it[TutorsTable.phone],
+                            email = it[TutorsTable.email],
+                            bio = it[TutorsTable.bio],
+                            subjects = it[TutorsTable.subjects],
+                            languages = it[TutorsTable.languages_spoken],
+                            location = it[TutorsTable.location],
+                            dateOfBirth = it[TutorsTable.dateOfBirth],
+                            rating = it[TutorsTable.rating].toDouble(),
+                            profilePicture = it[TutorsTable.profilePicture],
+                            password = it[TutorsTable.password],
                         )
-                    }.toList()
+                    }
             }
             println("get all 2/2")
 
             ttt.forEach { println(it) }
+
+            println("Number: " + ttt.count())
 
             ttt
         }
@@ -158,12 +149,19 @@ class TutorService(database: Database) {
 
     suspend fun chatbot(query: String): String? {
         println("chatbot 1/2")
+
         return dbQuery{
             transaction {
                 // response = generateRagResponse(query)
                 exec("SELECT set_config('ai.ollama_host', 'http://host.docker.internal:11434', false);")
+                println("local ollama selected")
+                // TODO fix error with single quote ' in query
                 exec("SELECT generate_rag_response('$query') as response;") { rs ->
                     if (rs.next()) {
+                        println("second exec done")
+
+                        println("LLM response: " + rs.getString("response"))
+
                         rs.getString("response")
                     } else {
                         null
@@ -177,20 +175,21 @@ class TutorService(database: Database) {
 
     suspend fun read(id: UUID): ExposedTutor? {
         return dbQuery {
-            Tutors.selectAll().where { Tutors.id eq id }
+            TutorsTable.selectAll().where { TutorsTable.id eq id }
                 .map {
                     ExposedTutor(
                         //it[Tutors.id],
-                        it[Tutors.name],
-                        it[Tutors.phone],
-                        it[Tutors.email],
-                        it[Tutors.bio],
-                        it[Tutors.subjects],
-                        it[Tutors.languages_spoken],
-                        it[Tutors.location],
-                        it[Tutors.rating].toDouble(),
-                        it[Tutors.profilePicture],
-                        it[Tutors.password]
+                        it[TutorsTable.name],
+                        it[TutorsTable.phone],
+                        it[TutorsTable.email],
+                        it[TutorsTable.bio],
+                        it[TutorsTable.subjects],
+                        it[TutorsTable.languages_spoken],
+                        it[TutorsTable.location],
+                        it[TutorsTable.dateOfBirth],
+                        it[TutorsTable.rating].toDouble(),
+                        it[TutorsTable.profilePicture],
+                        it[TutorsTable.password]
                     )
                 }
                 .singleOrNull()
@@ -199,7 +198,7 @@ class TutorService(database: Database) {
 
     suspend fun update(id: UUID, tutor: ExposedTutor) {
         dbQuery {
-            Tutors.update({ Tutors.id eq id }) {
+            TutorsTable.update({ TutorsTable.id eq id }) {
                 it[name] = tutor.name
                 it[phone] = tutor.phone
                 it[email] = tutor.email
@@ -207,6 +206,7 @@ class TutorService(database: Database) {
                 //it[subjects] = tutor.subjects
                 it[languages_spoken] = tutor.languages
                 it[location] = tutor.location
+                it[dateOfBirth] = tutor.dateOfBirth
                 it[rating] = tutor.rating.toBigDecimal()
                 it[profilePicture] = tutor.profilePicture
                 it[password] = tutor.password
@@ -216,10 +216,7 @@ class TutorService(database: Database) {
 
     suspend fun delete(id: UUID) {
         dbQuery {
-            Tutors.deleteWhere { Tutors.id eq id }
+            TutorsTable.deleteWhere { TutorsTable.id eq id }
         }
     }
-
-    private suspend fun <T> dbQuery(block: suspend () -> T): T =
-        newSuspendedTransaction(Dispatchers.IO) { block() }
 }

@@ -7,8 +7,10 @@ fun main(args: Array<String>) {
 }
 
 fun Application.module() {
-    configureSecurity()
+
+    
     configureHTTP()
+    configureSecurity()
     configureSerialization()
     configureDatabases()
     configureRouting()
